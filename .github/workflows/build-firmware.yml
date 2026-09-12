@@ -1,0 +1,107 @@
+name: Build ESP32 firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firmware-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 Arduino core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli core list
+
+      - name: Create private Wi-Fi header
+        env:
+          T1N_WIFI_SSID: ${{ secrets.T1N_WIFI_SSID }}
+          T1N_WIFI_PASS: ${{ secrets.T1N_WIFI_PASS }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          ssid = os.environ.get('T1N_WIFI_SSID', '')
+          password = os.environ.get('T1N_WIFI_PASS', '')
+          if not ssid or not password:
+              raise SystemExit('Missing repository Actions secrets T1N_WIFI_SSID and/or T1N_WIFI_PASS')
+          p = pathlib.Path('firmware/t1n_smartlock/secrets.h')
+          p.write_text(
+              '#pragma once\n'
+              '#define T1N_WIFI_SSID ' + json.dumps(ssid) + '\n'
+              '#define T1N_WIFI_PASS ' + json.dumps(password) + '\n'
+          )
+          PY
+
+      - name: Compile ESP32 Dev Module with OTA partition
+        run: |
+          mkdir -p build dist
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32:PartitionScheme=min_spiffs \
+            --output-dir build \
+            firmware/t1n_smartlock
+
+      - name: Prepare OTA files
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_BIN="$(find build -maxdepth 1 -type f -name '*.bin' \
+            ! -name '*.bootloader.bin' \
+            ! -name '*.partitions.bin' \
+            ! -name '*.merged.bin' \
+            -printf '%s %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+          test -n "$APP_BIN"
+          cp "$APP_BIN" dist/firmware.bin
+          sha256sum dist/firmware.bin | awk '{print $1}' > dist/firmware.sha256
+          python3 - <<'PY'
+          import datetime, json, os, pathlib
+          sha = pathlib.Path('dist/firmware.sha256').read_text().strip()
+          repo = os.environ['GITHUB_REPOSITORY']
+          commit = os.environ['GITHUB_SHA']
+          manifest = {
+              'version': 'v9-remote-ota+' + commit[:7],
+              'commit': commit,
+              'built_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'firmware_url': f'https://github.com/{repo}/releases/download/latest/firmware.bin',
+              'sha256_url': f'https://github.com/{repo}/releases/download/latest/firmware.sha256',
+              'sha256': sha,
+              'board': 'ESP32 Dev Module',
+              'fqbn': 'esp32:esp32:esp32:PartitionScheme=min_spiffs'
+          }
+          pathlib.Path('dist/manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+          ls -lh dist
+          cat dist/firmware.sha256
+
+      - name: Publish moving latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest \
+            dist/firmware.bin \
+            dist/firmware.sha256 \
+            dist/manifest.json \
+            --target "$GITHUB_SHA" \
+            --title "Latest T1N Smart Lock Firmware" \
+            --notes "Automatically built from main at commit $GITHUB_SHA. This release tag intentionally moves so the ESP32 always has one stable OTA URL."
