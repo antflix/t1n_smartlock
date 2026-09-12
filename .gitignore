@@ -1,0 +1,7 @@
+firmware/t1n_smartlock/secrets.h
+build/
+dist/
+*.bin
+*.elf
+*.map
+.DS_Store
