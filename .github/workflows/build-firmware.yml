@@ -34,7 +34,7 @@ jobs:
           arduino-cli core install esp32:esp32
           arduino-cli core list
 
-      - name: Create private Wi-Fi header
+      - name: Create build Wi-Fi header
         env:
           T1N_WIFI_SSID: ${{ secrets.T1N_WIFI_SSID }}
           T1N_WIFI_PASS: ${{ secrets.T1N_WIFI_PASS }}
@@ -43,14 +43,20 @@ jobs:
           import json, os, pathlib
           ssid = os.environ.get('T1N_WIFI_SSID', '')
           password = os.environ.get('T1N_WIFI_PASS', '')
-          if not ssid or not password:
-              raise SystemExit('Missing repository Actions secrets T1N_WIFI_SSID and/or T1N_WIFI_PASS')
+          can_publish = bool(ssid and password)
+          if not can_publish:
+              # Still compile the firmware so CI catches source/build errors,
+              # but never publish this placeholder-credential build for OTA use.
+              ssid = 'BUILD_TEST_SSID'
+              password = 'BUILD_TEST_PASSWORD'
           p = pathlib.Path('firmware/t1n_smartlock/secrets.h')
           p.write_text(
               '#pragma once\n'
               '#define T1N_WIFI_SSID ' + json.dumps(ssid) + '\n'
               '#define T1N_WIFI_PASS ' + json.dumps(password) + '\n'
           )
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('CAN_PUBLISH=' + ('true' if can_publish else 'false') + '\n')
           PY
 
       - name: Compile ESP32 Dev Module with OTA partition
@@ -94,6 +100,7 @@ jobs:
           cat dist/firmware.sha256
 
       - name: Publish moving latest release
+        if: env.CAN_PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -105,3 +112,9 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Latest T1N Smart Lock Firmware" \
             --notes "Automatically built from main at commit $GITHUB_SHA. This release tag intentionally moves so the ESP32 always has one stable OTA URL."
+
+      - name: Explain skipped OTA release
+        if: env.CAN_PUBLISH != 'true'
+        run: |
+          echo '### Build succeeded, OTA release not published' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Add repository Actions secrets `T1N_WIFI_SSID` and `T1N_WIFI_PASS`, then re-run this workflow. Placeholder credentials are used only to validate compilation.' >> "$GITHUB_STEP_SUMMARY"
