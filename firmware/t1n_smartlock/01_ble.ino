@@ -105,7 +105,6 @@ String formatAddr(const uint8_t* a) {
 }
 
 bool saveIRKFromBond(const esp_ble_bond_dev_t& bond) {
-  // Upstream ESPKeylessCar reverses the stack-provided IRK before RPA use.
   for (int k = 0; k < 16; k++) phoneIRK[k] = bond.bond_key.pid_key.irk[15 - k];
   saveIRK(phoneIRK);
   hasIRK = true;
@@ -135,9 +134,7 @@ void removeAllBonds() {
   esp_ble_bond_dev_t* list = (esp_ble_bond_dev_t*)malloc(sizeof(esp_ble_bond_dev_t) * n);
   if (!list) return;
   esp_ble_get_bond_device_list(&n, list);
-  for (int i = 0; i < n; i++) {
-    esp_ble_remove_bond_device(list[i].bd_addr);
-  }
+  for (int i = 0; i < n; i++) esp_ble_remove_bond_device(list[i].bd_addr);
   free(list);
   addLog(String("[BLE] removed ") + n + " bond(s)");
 }
@@ -285,7 +282,6 @@ void startPairingMode() {
   hr->setValue(fakeHr, 2);
   heart->start();
 
-  // Match the known-working ESPKeylessCar security setup.
   esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_BOND;
   esp_ble_io_cap_t iocap = ESP_IO_CAP_KBDISP;
   uint8_t key_size = 16;
@@ -326,7 +322,7 @@ void updateBleScanning() {
   if (millis() - lastScanStart < 1400) return;
   lastScanStart = millis();
   bleScanCycles++;
-  bleScan->start(1, false); // blocking 1 second, conservative/core-compatible
+  bleScan->start(1, false);
   bleScan->clearResults();
 }
 
@@ -360,8 +356,6 @@ void detectDoorCloseTransitions() {
 bool doorTrendIsClearlyWeaker() {
   if (trendCount < TREND_MIN_SAMPLES) return false;
 
-  // Use every sample, not just first vs last: linear-regression slope plus
-  // a majority of step-to-step movements toward weaker RSSI.
   float sumT=0, sumR=0, sumTT=0, sumTR=0;
   int weakerSteps=0, strongerSteps=0;
   for (int i=0;i<trendCount;i++) {
@@ -371,7 +365,7 @@ bool doorTrendIsClearlyWeaker() {
     if (i > 0) {
       int delta = trendRssi[i] - trendRssi[i-1];
       if (delta <= -1) weakerSteps++;
-      else if (delta >= 2) strongerSteps++; // tolerate 0/+1 dB noise
+      else if (delta >= 2) strongerSteps++;
     }
   }
   float n = (float)trendCount;
@@ -394,8 +388,6 @@ void updateDoorTrend() {
   if (!doorTrendActive) return;
   uint32_t now = millis();
 
-  // Capture roughly one matched-phone RSSI sample per second. Only use a
-  // sample if the phone has actually been seen recently.
   if ((lastTrendSampleMs == 0 || now - lastTrendSampleMs >= TREND_SAMPLE_MS) &&
       phoneSeen && now - lastSeenMs <= 2500 && trendCount < TREND_MAX_SAMPLES) {
     trendRssi[trendCount] = lastRSSI;
@@ -410,13 +402,14 @@ void updateDoorTrend() {
   if (doorTrendIsClearlyWeaker()) {
     trendStatus = "FAST DEPARTURE -> LOCK";
     addLog("[AUTO] 6s post-door-close RSSI trend confirms departure");
-    ensureDesiredState(true, false);
-    proximityUnlocked = false;
-    strongCount = 0;
-    weakRssiSinceMs = 0;
+    if (ensureDesiredState(true, false)) {
+      proximityUnlocked = false;
+      strongCount = 0;
+      weakRssiSinceMs = 0;
+    }
   } else {
     trendStatus = "NO CLEAR TREND; normal rule";
-    addLog("[AUTO] 6s post-door-close trend not convincing; normal -95/10s rule continues");
+    addLog("[AUTO] 6s trend not convincing; normal departure rule continues");
   }
   doorTrendActive = false;
   trendCount = 0;
@@ -428,36 +421,36 @@ void updateProximityLogic() {
 
   if (strongCount >= strongConfirmCount && !proximityUnlocked) {
     addLog(String("[AUTO] approach confirmed RSSI=") + lastRSSI);
-    ensureDesiredState(false, false);
-    proximityUnlocked = true;
+    if (ensureDesiredState(false, false)) {
+      proximityUnlocked = true;
+      weakRssiSinceMs = 0;
+    }
     strongCount = 0;
-    weakRssiSinceMs = 0;
   }
 
   updateDoorTrend();
 
-  // Normal departure rule #1: continuously weak (<= -95 dBm) for 10 seconds.
   if (weakRssiSinceMs && now - weakRssiSinceMs >= weakRssiTimeoutMs) {
     addLog(String("[AUTO] RSSI <= ") + rssiLockThreshold + " dBm for " +
            (now-weakRssiSinceMs) + "ms -> lock");
-    ensureDesiredState(true, false);
-    proximityUnlocked = false;
-    phoneSeen = false;
-    strongCount = 0;
-    weakRssiSinceMs = 0;
-    resetDoorTrend("IDLE");
+    if (ensureDesiredState(true, false)) {
+      proximityUnlocked = false;
+      phoneSeen = false;
+      strongCount = 0;
+      weakRssiSinceMs = 0;
+      resetDoorTrend("IDLE");
+    }
     return;
   }
 
-  // Normal departure rule #2: no matched advertisements at all for 10 seconds.
   if (phoneSeen && now - lastSeenMs >= phoneGoneTimeoutMs) {
     addLog(String("[AUTO] phone unseen age=") + (now-lastSeenMs) + "ms -> lock");
-    ensureDesiredState(true, false);
-    proximityUnlocked = false;
-    phoneSeen = false;
-    strongCount = 0;
-    weakRssiSinceMs = 0;
-    resetDoorTrend("IDLE");
+    if (ensureDesiredState(true, false)) {
+      proximityUnlocked = false;
+      phoneSeen = false;
+      strongCount = 0;
+      weakRssiSinceMs = 0;
+      resetDoorTrend("IDLE");
+    }
   }
 }
-
