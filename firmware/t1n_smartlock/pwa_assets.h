@@ -46,7 +46,7 @@ const char OTA_HTML[] PROGMEM = R"HTML(
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#101010"><title>T1N Firmware Update</title>
 <style>
-*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;background:#101010;color:#fff;margin:0;padding:20px}.wrap{max-width:620px;margin:auto}.card{background:#1c1c1e;border-radius:18px;padding:20px;margin:16px 0}h1{font-size:26px;margin:4px 0 8px}h2{font-size:18px;margin:0 0 10px}.muted{color:#aaa;line-height:1.45}.btn{width:100%;border:0;border-radius:14px;padding:16px;font-size:17px;font-weight:800;background:#356aa0;color:#fff;margin-top:12px}.btn:disabled{opacity:.45}.secondary{background:#555}.status{margin-top:14px;white-space:pre-wrap;word-break:break-word;color:#ddd}.back{color:#8ec5ff;text-decoration:none}
+*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;background:#101010;color:#fff;margin:0;padding:20px}.wrap{max-width:620px;margin:auto}.card{background:#1c1c1e;border-radius:18px;padding:20px;margin:16px 0}h1{font-size:26px;margin:4px 0 8px}h2{font-size:18px;margin:0 0 10px}.muted{color:#aaa;line-height:1.45}.btn{width:100%;border:0;border-radius:14px;padding:16px;font-size:17px;font-weight:800;background:#356aa0;color:#fff;margin-top:12px}.btn:disabled{opacity:.45}.secondary{background:#555}.status{margin-top:14px;white-space:pre-wrap;word-break:break-word;color:#ddd}.back{color:#8ec5ff;text-decoration:none}.file{display:block;width:100%;margin-top:14px;padding:13px;border:1px solid #444;border-radius:12px;background:#121214;color:#ddd}
 </style></head><body><div class="wrap">
 <a class="back" href="/debug">← Diagnostics</a>
 <h1>Firmware Update</h1>
@@ -54,7 +54,12 @@ const char OTA_HTML[] PROGMEM = R"HTML(
 <div class="muted">Press once to download and install the current <b>latest</b> firmware release from the T1N Smart Lock repository. The ESP32 will reboot automatically after a successful install.</div>
 <button id="latest" class="btn" onclick="installLatest()">CHECK FOR UPDATES &amp; INSTALL</button>
 <div id="status" class="status"></div></div>
-<div class="card"><h2>Manual .bin upload</h2><div class="muted">The original local upload path is still available at <code>/api/update</code> if it is ever needed for recovery.</div></div>
+<div class="card"><h2>Manual .bin upload</h2>
+<div class="muted">Recovery fallback. Choose a compiled <code>firmware.bin</code> file and upload it directly to the ESP32.</div>
+<input id="binfile" class="file" type="file" accept=".bin,application/octet-stream">
+<button id="manual" class="btn secondary" onclick="installManual()">UPLOAD .BIN &amp; INSTALL</button>
+<div id="manualStatus" class="status"></div>
+</div>
 </div><script>
 const latestUrl='https://github.com/antflix/t1n_smartlock/releases/download/latest/firmware.bin';
 async function installLatest(){
@@ -64,6 +69,19 @@ async function installLatest(){
    const r=await fetch('/api/update-url?url='+encodeURIComponent(latestUrl),{method:'POST'});
    const t=await r.text();
    s.textContent=t;
+   if(!r.ok)b.disabled=false;
+ }catch(e){s.textContent='Connection lost. If the update succeeded, the ESP32 may already be rebooting.';}
+}
+async function installManual(){
+ const f=document.getElementById('binfile'),b=document.getElementById('manual'),s=document.getElementById('manualStatus');
+ if(!f.files.length){s.textContent='Choose a .bin firmware file first.';return;}
+ const file=f.files[0];
+ if(!file.name.toLowerCase().endsWith('.bin')){s.textContent='The selected file must end in .bin';return;}
+ b.disabled=true;s.textContent='Uploading firmware to ESP32…';
+ const data=new FormData();data.append('firmware',file,file.name);
+ try{
+   const r=await fetch('/api/update',{method:'POST',body:data});
+   const t=await r.text();s.textContent=t;
    if(!r.ok)b.disabled=false;
  }catch(e){s.textContent='Connection lost. If the update succeeded, the ESP32 may already be rebooting.';}
 }
