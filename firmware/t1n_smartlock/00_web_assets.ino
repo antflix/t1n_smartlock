@@ -2,7 +2,9 @@
 // function-prototype generator never parses JavaScript syntax.
 #define MAIN_HTML LEGACY_MAIN_HTML
 #define MANIFEST_JSON LEGACY_MANIFEST_JSON
+#define OTA_HTML LEGACY_OTA_HTML
 #include "web_assets.h"
 #undef MAIN_HTML
 #undef MANIFEST_JSON
+#undef OTA_HTML
 #include "pwa_assets.h"
