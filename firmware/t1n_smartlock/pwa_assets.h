@@ -64,11 +64,13 @@ const char OTA_HTML[] PROGMEM = R"HTML(
 const latestUrl='https://github.com/antflix/t1n_smartlock/releases/download/latest/firmware.bin';
 async function installLatest(){
  const b=document.getElementById('latest'),s=document.getElementById('status');
- b.disabled=true;s.textContent='Downloading latest firmware from GitHub…';
+ b.disabled=true;s.textContent='Checking latest firmware...';
  try{
+   s.textContent='Downloading update on ESP32...';
    const r=await fetch('/api/update-url?url='+encodeURIComponent(latestUrl),{method:'POST'});
    const t=await r.text();
-   s.textContent=t;
+   s.textContent=r.ok?'Update installed. Rebooting...':'Update failed: '+t;
+   if(r.ok)setTimeout(()=>{s.textContent='Rebooting. Refresh this page in about 20 seconds.';},2500);
    if(!r.ok)b.disabled=false;
  }catch(e){s.textContent='Connection lost. If the update succeeded, the ESP32 may already be rebooting.';}
 }
