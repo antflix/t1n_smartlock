@@ -325,22 +325,13 @@ void directTwoPulses() {
   directPulse();
 }
 
+// One source of truth for command decisions:
+//   AWAKE  -> LEFT LED decides state.
+//   ASLEEP -> remembered state decides state. LED is ignored completely.
 VehicleLockState stateForCommandDecision() {
-  if (driverObservedLocked()) return VEH_LOCKED;
-  if (driverObservedUnlocked()) return VEH_UNLOCKED;
-
-  // Fresh physical evidence wins whenever CTM is awake.
-  if (ctmOfficialAwake) {
-    return VEH_UNKNOWN;
-  }
-
-  // While asleep the LEDs are dark, so only use the last confirmed state.
-  return lastKnownLockState;
-}
-
-VehicleLockState observedLockStateFromLights() {
-  if (driverObservedLocked()) return VEH_LOCKED;
-  if (driverObservedUnlocked()) return VEH_UNLOCKED;
+  if (!ctmOfficialAwake) return lastKnownLockState;
+  if (drvLed.cls == LED_SOLID) return VEH_LOCKED;
+  if (drvLed.cls == LED_OFF) return VEH_UNLOCKED;
   return VEH_UNKNOWN;
 }
 
@@ -350,7 +341,6 @@ bool ensureDesiredState(bool wantLocked, bool manualRequest) {
   VehicleLockState wanted = wantLocked ? VEH_LOCKED : VEH_UNLOCKED;
   desiredLockState = wanted;
 
-  // Pull in fresh LED samples before making a toggle decision.
   waitAndSample(300);
 
   addLog(String("[COMMAND] ") + lastCommand + (manualRequest ? " manual" : " auto") +
@@ -371,9 +361,8 @@ bool ensureDesiredState(bool wantLocked, bool manualRequest) {
 
   VehicleLockState current = stateForCommandDecision();
 
-  // If CTM is awake, immediately synchronize memory to the actual LEFT LED.
   if (ctmOfficialAwake && current != VEH_UNKNOWN) {
-    setLastKnownLockState(current, "command precheck LEFT LED");
+    setLastKnownLockState(current, "awake command precheck LEFT LED");
   }
 
   if (current == wanted) {
@@ -382,32 +371,43 @@ bool ensureDesiredState(bool wantLocked, bool manualRequest) {
     return true;
   }
 
-  for (int attempt = 1; attempt <= 2; attempt++) {
-    addLog(String("[COMMAND] pulse attempt ") + attempt + " toward " + lastCommand);
-    directPulse();
-    waitAndSample(STATE_SETTLE_MS);
+  if (current == VEH_UNKNOWN) {
+    lastCommandResult = "blocked - state unknown";
+    addLog("[COMMAND] no pulse - state unknown");
+    return false;
+  }
 
-    VehicleLockState after = observedLockStateFromLights();
-    if (after != VEH_UNKNOWN) {
-      setLastKnownLockState(after, "post-pulse LEFT LED");
-      if (after == wanted) {
-        lastCommandResult = wantLocked ? "LOCK confirmed" : "UNLOCK confirmed";
-        addLog(String("[COMMAND] ") + lastCommandResult);
-        return true;
-      }
-      addLog(String("[COMMAND] LEFT shows ") +
-             (after == VEH_LOCKED ? "LOCKED" : "UNLOCKED") +
-             "; corrective pulse needed");
-      continue;
+  if (!manualRequest && wantLocked && blockAutoLockOnBlink && anyBlink()) {
+    lastCommandResult = "auto lock blocked by door/blink";
+    addLog("[COMMAND] no pulse - auto lock blocked by door/blink");
+    return false;
+  }
+
+  // Opposite known state: exactly one toggle pulse. Never retry automatically.
+  addLog(String("[COMMAND] one pulse toward ") + lastCommand);
+  directPulse();
+  waitAndSample(STATE_SETTLE_MS);
+
+  // The requested toggle is now our remembered state. If the LEFT LED gives
+  // usable evidence, use it to verify/correct memory, but never send a second pulse.
+  VehicleLockState after = VEH_UNKNOWN;
+  if (drvLed.cls == LED_SOLID) after = VEH_LOCKED;
+  else if (drvLed.cls == LED_OFF) after = VEH_UNLOCKED;
+
+  if (after != VEH_UNKNOWN) {
+    setLastKnownLockState(after, "post-pulse LEFT LED");
+    if (after == wanted) {
+      lastCommandResult = wantLocked ? "LOCK confirmed" : "UNLOCK confirmed";
+      addLog(String("[COMMAND] ") + lastCommandResult);
+      return true;
     }
-
-    setLockStateUnknown("post-pulse LEFT LED unreadable");
-    lastCommandResult = "pulse sent; result not confirmed";
+    lastCommandResult = "pulse sent; LEFT LED disagrees";
     addLog(String("[COMMAND] ") + lastCommandResult);
     return false;
   }
 
-  lastCommandResult = "corrective pulse sent; desired state not confirmed";
+  setLastKnownLockState(wanted, "single toggle pulse");
+  lastCommandResult = wantLocked ? "LOCK pulse sent" : "UNLOCK pulse sent";
   addLog(String("[COMMAND] ") + lastCommandResult);
-  return false;
+  return true;
 }
