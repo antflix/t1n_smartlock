@@ -297,6 +297,10 @@ uint32_t pulseCountTotal = 0;
 uint32_t commandCountTotal = 0;
 String lastCommand = "none";
 String lastCommandResult = "none";
+VehicleLockState desiredLockState = VEH_UNKNOWN;
+VehicleLockState lastAutoDesired = VEH_UNKNOWN;
+uint32_t lastAutoAttemptMs = 0;
+static constexpr uint32_t AUTO_RETRY_COOLDOWN_MS = 10000;
 
 void setLockOutput(bool high, const char* reason) {
   digitalWrite(PIN_LOCK_PULSE, high ? HIGH : LOW);
@@ -322,10 +326,11 @@ void directTwoPulses() {
 }
 
 VehicleLockState stateForCommandDecision() {
+  if (driverObservedLocked()) return VEH_LOCKED;
+  if (driverObservedUnlocked()) return VEH_UNLOCKED;
+
   // Fresh physical evidence wins whenever CTM is awake.
   if (ctmOfficialAwake) {
-    if (driverObservedLocked()) return VEH_LOCKED;
-    if (driverObservedUnlocked()) return VEH_UNLOCKED;
     return VEH_UNKNOWN;
   }
 
@@ -333,9 +338,17 @@ VehicleLockState stateForCommandDecision() {
   return lastKnownLockState;
 }
 
+VehicleLockState observedLockStateFromLights() {
+  if (driverObservedLocked()) return VEH_LOCKED;
+  if (driverObservedUnlocked()) return VEH_UNLOCKED;
+  return VEH_UNKNOWN;
+}
+
 bool ensureDesiredState(bool wantLocked, bool manualRequest) {
   commandCountTotal++;
   lastCommand = wantLocked ? "LOCK" : "UNLOCK";
+  VehicleLockState wanted = wantLocked ? VEH_LOCKED : VEH_UNLOCKED;
+  desiredLockState = wanted;
 
   // Pull in fresh LED samples before making a toggle decision.
   waitAndSample(300);
@@ -345,18 +358,15 @@ bool ensureDesiredState(bool wantLocked, bool manualRequest) {
          " left=" + ledClassName(drvLed.cls) +
          " ctm=" + (ctmOfficialAwake ? "AWAKE" : "ASLEEP"));
 
-  // Never make an automatic lock decision while the van is showing a door/blink state.
-  if (!manualRequest && wantLocked && blockAutoLockOnBlink && anyBlink()) {
-    lastCommandResult = "blocked by door/blink state";
-    addLog("[COMMAND] blocked: door/blink state");
+  if (!manualRequest && lastAutoDesired == wanted &&
+      millis() - lastAutoAttemptMs < AUTO_RETRY_COOLDOWN_MS) {
+    lastCommandResult = "auto retry cooldown";
+    addLog("[COMMAND] auto retry cooldown");
     return false;
   }
-
-  // A blinking LEFT LED is not a trustworthy lock-state indication. Do not toggle blindly.
-  if (drvLed.cls == LED_BLINK) {
-    lastCommandResult = "blocked; LEFT LED blinking";
-    addLog("[COMMAND] blocked: LEFT LED blinking");
-    return false;
+  if (!manualRequest) {
+    lastAutoDesired = wanted;
+    lastAutoAttemptMs = millis();
   }
 
   VehicleLockState current = stateForCommandDecision();
@@ -366,50 +376,38 @@ bool ensureDesiredState(bool wantLocked, bool manualRequest) {
     setLastKnownLockState(current, "command precheck LEFT LED");
   }
 
-  VehicleLockState wanted = wantLocked ? VEH_LOCKED : VEH_UNLOCKED;
-
   if (current == wanted) {
     lastCommandResult = wantLocked ? "already locked" : "already unlocked";
     addLog(String("[COMMAND] no pulse - ") + lastCommandResult);
     return true;
   }
 
-  if (current == VEH_UNKNOWN) {
-    lastCommandResult = "blocked; lock state unknown";
-    addLog("[COMMAND] no toggle because state is unknown");
+  for (int attempt = 1; attempt <= 2; attempt++) {
+    addLog(String("[COMMAND] pulse attempt ") + attempt + " toward " + lastCommand);
+    directPulse();
+    waitAndSample(STATE_SETTLE_MS);
+
+    VehicleLockState after = observedLockStateFromLights();
+    if (after != VEH_UNKNOWN) {
+      setLastKnownLockState(after, "post-pulse LEFT LED");
+      if (after == wanted) {
+        lastCommandResult = wantLocked ? "LOCK confirmed" : "UNLOCK confirmed";
+        addLog(String("[COMMAND] ") + lastCommandResult);
+        return true;
+      }
+      addLog(String("[COMMAND] LEFT shows ") +
+             (after == VEH_LOCKED ? "LOCKED" : "UNLOCKED") +
+             "; corrective pulse needed");
+      continue;
+    }
+
+    setLockStateUnknown("post-pulse LEFT LED unreadable");
+    lastCommandResult = "pulse sent; result not confirmed";
+    addLog(String("[COMMAND] ") + lastCommandResult);
     return false;
   }
 
-  // Proven behavior on this van: ONE WT/YL pulse toggles the locks, awake or asleep.
-  addLog("[COMMAND] sending exactly one toggle pulse");
-  directPulse();
-
-  // The command itself wakes/uses the CTM, so sample the LEFT LED continuously
-  // while the locks settle and use that as the physical result.
-  waitAndSample(STATE_SETTLE_MS);
-
-  VehicleLockState after = VEH_UNKNOWN;
-  if (drvLed.cls == LED_SOLID) after = VEH_LOCKED;
-  else if (drvLed.cls == LED_OFF) after = VEH_UNLOCKED;
-
-  if (after != VEH_UNKNOWN) {
-    setLastKnownLockState(after, "post-pulse LEFT LED");
-  } else {
-    setLockStateUnknown("post-pulse LEFT LED was not steady");
-  }
-
-  if (after == wanted) {
-    lastCommandResult = wantLocked ? "LOCK confirmed" : "UNLOCK confirmed";
-    addLog(String("[COMMAND] ") + lastCommandResult);
-    return true;
-  }
-
-  if (after == VEH_UNKNOWN) {
-    lastCommandResult = "pulse sent; result not confirmed";
-  } else {
-    lastCommandResult = String("pulse sent; LEFT indicates ") +
-                        (after == VEH_LOCKED ? "LOCKED" : "UNLOCKED");
-  }
+  lastCommandResult = "corrective pulse sent; desired state not confirmed";
   addLog(String("[COMMAND] ") + lastCommandResult);
   return false;
 }
