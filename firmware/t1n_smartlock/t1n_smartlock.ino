@@ -174,8 +174,6 @@ void waitAndSample(uint32_t ms) {
 }
 
 bool anyBlink() { return drvLed.cls == LED_BLINK || paxLed.cls == LED_BLINK; }
-bool driverObservedLocked() { return drvLed.cls == LED_SOLID; }
-bool driverObservedUnlocked() { return drvLed.cls == LED_OFF; }
 
 // ---------------- Vehicle state ----------------
 VehicleLockState lastKnownLockState = VEH_UNKNOWN;
@@ -192,15 +190,6 @@ void setLastKnownLockState(VehicleLockState st, const char* why, bool persist=tr
     addLog(String("[STATE] ") + (st == VEH_LOCKED ? "LOCKED" : "UNLOCKED") +
            " reason=" + why);
     if (persist) saveLastKnownLockState();
-  }
-}
-
-void setLockStateUnknown(const char* why) {
-  if (lastKnownLockState != VEH_UNKNOWN) {
-    lastKnownLockState = VEH_UNKNOWN;
-    EEPROM.writeChar(ADDR_LAST_LOCK, (int8_t)VEH_UNKNOWN);
-    EEPROM.commit();
-    addLog(String("[STATE] UNKNOWN reason=") + why);
   }
 }
 
@@ -227,7 +216,7 @@ uint32_t ctmLast5sEdges = 0;
 uint32_t ctmWindowStart = 0;
 uint32_t ctmLastEdgeMs = 0;
 bool ctmOfficialAwake = false;
-bool ctmRawAwake = false; // kept for WebUI compatibility; always equals official state
+bool ctmRawAwake = false; // WebUI compatibility; always equals official state
 
 void IRAM_ATTR onCtmEdge() {
   portENTER_CRITICAL_ISR(&ctmMux);
@@ -250,12 +239,10 @@ void updateCtmDiagnostics() {
   bool awake = ctmLast5sEdges >= CTM_AWAKE_THRESHOLD_5S;
   if (awake != ctmOfficialAwake) {
     ctmOfficialAwake = awake;
-    ctmRawAwake = awake;
     addLog(String("[CTM] ") + (awake ? "AWAKE" : "ASLEEP") +
            " edges5s=" + ctmLast5sEdges);
-  } else {
-    ctmRawAwake = awake;
   }
+  ctmRawAwake = ctmOfficialAwake;
 }
 
 String ctmDiagnosticName() {
@@ -263,29 +250,34 @@ String ctmDiagnosticName() {
          " (" + String(ctmLast5sEdges) + " edges/5s)";
 }
 
-// LEFT LED is authoritative only while CTM is awake.
+// The entire lock-state model is intentionally only these two rules:
+//   CTM AWAKE  -> LEFT LED is truth: SOLID=LOCKED, OFF=UNLOCKED.
+//   CTM ASLEEP -> LEDs mean nothing; remembered state is truth.
+VehicleLockState currentLockState() {
+  if (!ctmOfficialAwake) return lastKnownLockState;
+  if (drvLed.cls == LED_SOLID) return VEH_LOCKED;
+  if (drvLed.cls == LED_OFF) return VEH_UNLOCKED;
+  return VEH_UNKNOWN;
+}
+
 void updateRememberedLockFromLed() {
   if (!ctmOfficialAwake) return;
-  if (drvLed.cls == LED_SOLID) {
-    setLastKnownLockState(VEH_LOCKED, "awake LEFT LED solid");
-  } else if (drvLed.cls == LED_OFF) {
-    setLastKnownLockState(VEH_UNLOCKED, "awake LEFT LED off");
-  }
+  if (drvLed.cls == LED_SOLID) setLastKnownLockState(VEH_LOCKED, "awake LEFT solid");
+  else if (drvLed.cls == LED_OFF) setLastKnownLockState(VEH_UNLOCKED, "awake LEFT off");
 }
 
 bool fullyLocked() {
-  if (ctmOfficialAwake) return driverObservedLocked();
-  return lastKnownLockState == VEH_LOCKED;
+  return currentLockState() == VEH_LOCKED;
 }
 
 bool bothUnlocked() {
-  if (ctmOfficialAwake) return driverObservedUnlocked();
-  return lastKnownLockState == VEH_UNLOCKED;
+  return currentLockState() == VEH_UNLOCKED;
 }
 
 String lockStateName() {
-  String name = rememberedLockName();
-  if (!ctmOfficialAwake && lastKnownLockState != VEH_UNKNOWN) name += " / REMEMBERED";
+  VehicleLockState st = currentLockState();
+  String name = st == VEH_LOCKED ? "LOCKED" : st == VEH_UNLOCKED ? "UNLOCKED" : "UNKNOWN";
+  if (!ctmOfficialAwake && st != VEH_UNKNOWN) name += " / REMEMBERED";
   if (anyBlink()) name += " / DOOR-OPEN";
   return name;
 }
@@ -298,9 +290,6 @@ uint32_t commandCountTotal = 0;
 String lastCommand = "none";
 String lastCommandResult = "none";
 VehicleLockState desiredLockState = VEH_UNKNOWN;
-VehicleLockState lastAutoDesired = VEH_UNKNOWN;
-uint32_t lastAutoAttemptMs = 0;
-static constexpr uint32_t AUTO_RETRY_COOLDOWN_MS = 10000;
 
 void setLockOutput(bool high, const char* reason) {
   digitalWrite(PIN_LOCK_PULSE, high ? HIGH : LOW);
@@ -325,50 +314,35 @@ void directTwoPulses() {
   directPulse();
 }
 
-// One source of truth for command decisions:
-//   AWAKE  -> LEFT LED decides state.
-//   ASLEEP -> remembered state decides state. LED is ignored completely.
-VehicleLockState stateForCommandDecision() {
-  if (!ctmOfficialAwake) return lastKnownLockState;
-  if (drvLed.cls == LED_SOLID) return VEH_LOCKED;
-  if (drvLed.cls == LED_OFF) return VEH_UNLOCKED;
-  return VEH_UNKNOWN;
-}
-
 bool ensureDesiredState(bool wantLocked, bool manualRequest) {
   commandCountTotal++;
   lastCommand = wantLocked ? "LOCK" : "UNLOCK";
   VehicleLockState wanted = wantLocked ? VEH_LOCKED : VEH_UNLOCKED;
   desiredLockState = wanted;
 
-  waitAndSample(300);
-
-  addLog(String("[COMMAND] ") + lastCommand + (manualRequest ? " manual" : " auto") +
-         " remembered=" + rememberedLockName() +
-         " left=" + ledClassName(drvLed.cls) +
-         " ctm=" + (ctmOfficialAwake ? "AWAKE" : "ASLEEP"));
-
-  if (!manualRequest && lastAutoDesired == wanted &&
-      millis() - lastAutoAttemptMs < AUTO_RETRY_COOLDOWN_MS) {
-    lastCommandResult = "auto retry cooldown";
-    addLog("[COMMAND] auto retry cooldown");
+  // Door/blink protection applies only to automatic locking.
+  if (!manualRequest && wantLocked && blockAutoLockOnBlink && anyBlink()) {
+    lastCommandResult = "auto lock blocked by door/blink";
+    addLog("[COMMAND] no pulse - auto lock blocked by door/blink");
     return false;
   }
-  if (!manualRequest) {
-    lastAutoDesired = wanted;
-    lastAutoAttemptMs = millis();
-  }
 
-  VehicleLockState current = stateForCommandDecision();
+  // Refresh only the LED classifier. CTM awake/asleep remains the single gate
+  // that decides whether LED data is allowed to mean anything.
+  waitAndSample(300);
+  bool wasAwake = ctmOfficialAwake;
+  VehicleLockState current = currentLockState();
 
-  if (ctmOfficialAwake && current != VEH_UNKNOWN) {
-    setLastKnownLockState(current, "awake command precheck LEFT LED");
-  }
+  addLog(String("[COMMAND] ") + lastCommand + (manualRequest ? " manual" : " auto") +
+         " current=" + (current == VEH_LOCKED ? "LOCKED" : current == VEH_UNLOCKED ? "UNLOCKED" : "UNKNOWN") +
+         " source=" + (wasAwake ? "LEFT_LED" : "MEMORY") +
+         " remembered=" + rememberedLockName() +
+         " left=" + ledClassName(drvLed.cls) +
+         " ctm=" + (wasAwake ? "AWAKE" : "ASLEEP"));
 
-  if (current == wanted) {
-    lastCommandResult = wantLocked ? "already locked" : "already unlocked";
-    addLog(String("[COMMAND] no pulse - ") + lastCommandResult);
-    return true;
+  // While awake, copy the authoritative LED state into memory.
+  if (wasAwake && current != VEH_UNKNOWN) {
+    setLastKnownLockState(current, "awake command precheck");
   }
 
   if (current == VEH_UNKNOWN) {
@@ -377,36 +351,44 @@ bool ensureDesiredState(bool wantLocked, bool manualRequest) {
     return false;
   }
 
-  if (!manualRequest && wantLocked && blockAutoLockOnBlink && anyBlink()) {
-    lastCommandResult = "auto lock blocked by door/blink";
-    addLog("[COMMAND] no pulse - auto lock blocked by door/blink");
-    return false;
+  if (current == wanted) {
+    lastCommandResult = wantLocked ? "already locked" : "already unlocked";
+    addLog(String("[COMMAND] no pulse - ") + lastCommandResult);
+    return true;
   }
 
-  // Opposite known state: exactly one toggle pulse. Never retry automatically.
+  // Known opposite state. WT/YL is a toggle, so exactly ONE pulse is required.
   addLog(String("[COMMAND] one pulse toward ") + lastCommand);
   directPulse();
   waitAndSample(STATE_SETTLE_MS);
 
-  // The requested toggle is now our remembered state. If the LEFT LED gives
-  // usable evidence, use it to verify/correct memory, but never send a second pulse.
+  // If this command started while CTM was asleep, LED OFF is meaningless.
+  // Do not inspect it at all. A single toggle from a known opposite state means
+  // the remembered state becomes the requested state.
+  if (!wasAwake) {
+    setLastKnownLockState(wanted, "single toggle from remembered state");
+    lastCommandResult = wantLocked ? "LOCK pulse sent" : "UNLOCK pulse sent";
+    addLog(String("[COMMAND] ") + lastCommandResult);
+    return true;
+  }
+
+  // If the command started awake, LEFT LED is authoritative after the pulse.
   VehicleLockState after = VEH_UNKNOWN;
   if (drvLed.cls == LED_SOLID) after = VEH_LOCKED;
   else if (drvLed.cls == LED_OFF) after = VEH_UNLOCKED;
 
   if (after != VEH_UNKNOWN) {
-    setLastKnownLockState(after, "post-pulse LEFT LED");
-    if (after == wanted) {
-      lastCommandResult = wantLocked ? "LOCK confirmed" : "UNLOCK confirmed";
-      addLog(String("[COMMAND] ") + lastCommandResult);
-      return true;
-    }
-    lastCommandResult = "pulse sent; LEFT LED disagrees";
+    setLastKnownLockState(after, "post-pulse awake LEFT LED");
+    bool ok = after == wanted;
+    lastCommandResult = ok ? (wantLocked ? "LOCK confirmed" : "UNLOCK confirmed")
+                           : "pulse sent; LEFT LED disagrees";
     addLog(String("[COMMAND] ") + lastCommandResult);
-    return false;
+    return ok;
   }
 
-  setLastKnownLockState(wanted, "single toggle pulse");
+  // We knew the starting state and sent one toggle. If the LED is temporarily
+  // unreadable, remember the requested state. Never send a second pulse.
+  setLastKnownLockState(wanted, "single toggle; LEFT unreadable");
   lastCommandResult = wantLocked ? "LOCK pulse sent" : "UNLOCK pulse sent";
   addLog(String("[COMMAND] ") + lastCommandResult);
   return true;
