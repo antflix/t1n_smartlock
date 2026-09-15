@@ -7,6 +7,7 @@
     - GPIO23 pulls factory WT/YL command line to ground.
     - If CTM is awake, one pulse requests a lock-state change.
     - If CTM is asleep, first pulse wakes it; only after wake is positively detected may LEFT LED be trusted.
+    - Once CTM is awake, a command sends at most ONE lock-state pulse, then stops.
     - GPIO21 watches LEFT/driver lock LED: SOLID=LOCKED, OFF=UNLOCKED while CTM is awake.
     - Sleeping LEFT OFF is never interpreted as UNLOCKED.
     - Remembered state is an immediate estimate only. Real awake LEFT LED always reconciles it.
@@ -119,8 +120,8 @@ LedClass classifyLed(const LedHistory& h) {
   for (int i=0;i<h.count;i++) {
     int s=h.samples[idx];
     if (!runBroken) { if (s==newest) newestRun++; else runBroken=true; }
-    if (i>0 && s!=prev) transitions++;
-    prev=s; idx=(idx-1+LED_SAMPLES)%LED_SAMPLES;
+    if (i>0 && s != prev) transitions++;
+    prev = s; idx=(idx-1+LED_SAMPLES)%LED_SAMPLES;
   }
   if (transitions >= 2) return LED_BLINK;
   if (newest == 1 && newestRun >= SOLID_CONFIRM_SAMPLES) return LED_SOLID;
@@ -166,8 +167,6 @@ void updateCtmDiagnostics(){
 }
 String ctmDiagnosticName(){return String(ctmOfficialAwake?"AWAKE":"ASLEEP")+" ("+String(ctmLast5sEdges)+" edges/5s)";}
 
-// Short local measurement used only after a wake pulse. This avoids waiting for the stale
-// 5-second diagnostic window before deciding whether LEFT OFF is meaningful.
 bool measureCtmAwake(uint32_t sampleMs=CTM_WAKE_SAMPLE_MS){
   uint32_t startEdges;
   portENTER_CRITICAL(&ctmMux);startEdges=ctmEdgeTotal;portEXIT_CRITICAL(&ctmMux);
@@ -176,8 +175,6 @@ bool measureCtmAwake(uint32_t sampleMs=CTM_WAKE_SAMPLE_MS){
   uint32_t endEdges;
   portENTER_CRITICAL(&ctmMux);endEdges=ctmEdgeTotal;portEXIT_CRITICAL(&ctmMux);
   uint32_t edges=endEdges-startEdges;
-  // 350/5s = 70/s. 80 edges in 1.2s cleanly separates the observed awake ~89.6/s
-  // from asleep ~47.6-53.2/s.
   bool awake=edges>=CTM_WAKE_MIN_EDGES;
   addLog(String("[CTM] short-check edges=")+edges+"/"+sampleMs+"ms -> "+(awake?"AWAKE":"ASLEEP"));
   return awake;
@@ -195,57 +192,35 @@ String lastCommand="none",lastCommandResult="none";VehicleLockState desiredLockS
 void setLockOutput(bool high,const char* reason){digitalWrite(PIN_LOCK_PULSE,high?HIGH:LOW);digitalWrite(PIN_STATUS_LED,high?HIGH:LOW);delay(2);int rb=digitalRead(PIN_LOCK_PULSE);addLog(String("[GPIO23] ")+(high?"HIGH":"LOW")+" reason="+reason+" readback="+(rb?"HIGH":"LOW"));}
 void directPulse(uint32_t widthMs=PULSE_MS){pulseCountTotal++;addLog(String("[PULSE] #")+pulseCountTotal+" width="+widthMs+"ms");setLockOutput(true,"pulse-start");delay(widthMs);setLockOutput(false,"pulse-end");}
 void directTwoPulses(){directPulse();delay(BETWEEN_PULSES_MS);directPulse();}
-
-// Returns a real LED state only after CTM awake has been positively established.
 VehicleLockState verifiedAwakeLedState(){waitAndSample(300);return leftLedState();}
 
 bool ensureDesiredState(bool wantLocked,bool manualRequest){
   commandCountTotal++;lastCommand=wantLocked?"LOCK":"UNLOCK";
   VehicleLockState wanted=wantLocked?VEH_LOCKED:VEH_UNLOCKED;desiredLockState=wanted;
   if(!manualRequest&&wantLocked&&blockAutoLockOnBlink&&anyBlink()){lastCommandResult="auto lock blocked by door/blink";addLog("[COMMAND] no pulse - auto lock blocked by door/blink");return false;}
-
   waitAndSample(300);
   bool awake=ctmOfficialAwake;
   VehicleLockState actual=awake?leftLedState():VEH_UNKNOWN;
   addLog(String("[COMMAND] ")+lastCommand+(manualRequest?" manual":" auto")+" start="+(awake?"AWAKE":"ASLEEP")+" remembered="+rememberedLockName()+" left="+ledClassName(drvLed.cls));
-
   if(awake&&actual!=VEH_UNKNOWN)setLastKnownLockState(actual,"command precheck LEFT LED");
-
   if(!awake){
     addLog(String("[COMMAND] wake pulse before ")+lastCommand);
     directPulse();
-    // Do not trust LEFT OFF merely because a wake pulse was sent. Prove CTM awake first.
     uint32_t wakeStart=millis();
-    do {
-      awake=measureCtmAwake();
-      if(awake)break;
-    } while(millis()-wakeStart<CTM_WAKE_TIMEOUT_MS);
-    if(!awake){lastCommandResult="failed - CTM did not wake; no lock-state pulse";addLog(String("[COMMAND] ")+lastCommandResult);return false;}
+    do {awake=measureCtmAwake();if(awake)break;} while(millis()-wakeStart<CTM_WAKE_TIMEOUT_MS);
+    if(!awake){lastCommandResult="failed - CTM did not wake; attempt complete";addLog(String("[COMMAND] ")+lastCommandResult);return false;}
     actual=verifiedAwakeLedState();
     addLog(String("[VERIFY] awake LEFT=")+ledClassName(drvLed.cls)+" actual="+stateName(actual));
     if(actual!=VEH_UNKNOWN)setLastKnownLockState(actual,"verified LEFT after wake");
   }
-
-  // We always check actual awake LEFT before deciding. Memory was only the fast estimate.
   if(actual==wanted){lastCommandResult=wantLocked?"already locked - LED verified":"already unlocked - LED verified";addLog(String("[COMMAND] no state pulse - ")+lastCommandResult);return true;}
-  if(actual==VEH_UNKNOWN){lastCommandResult="failed - awake LEFT unreadable; no blind toggle";addLog(String("[COMMAND] ")+lastCommandResult);return false;}
-
+  if(actual==VEH_UNKNOWN){lastCommandResult="failed - awake LEFT unreadable; attempt complete";addLog(String("[COMMAND] ")+lastCommandResult);return false;}
   addLog(String("[COMMAND] one state pulse toward ")+lastCommand);
   directPulse();waitAndSample(STATE_SETTLE_MS);
-  // CTM was positively awake for this command, so LEFT OFF is meaningful here.
-  actual=leftLedState();
-  addLog(String("[VERIFY] after state pulse LEFT=")+ledClassName(drvLed.cls)+" actual="+stateName(actual)+" wanted="+stateName(wanted));
-  if(actual!=VEH_UNKNOWN)setLastKnownLockState(actual,"LEFT after state pulse");
-  if(actual==wanted){lastCommandResult=wantLocked?"LOCK confirmed":"UNLOCK confirmed";addLog(String("[COMMAND] ")+lastCommandResult);return true;}
-
-  // One bounded correction only when LEFT gives a definite opposite state. Never loop.
-  if(actual!=VEH_UNKNOWN){
-    addLog(String("[CORRECT] actual=")+stateName(actual)+" wanted="+stateName(wanted)+" -> one corrective pulse");
-    directPulse();waitAndSample(STATE_SETTLE_MS);
-    VehicleLockState corrected=leftLedState();
-    addLog(String("[VERIFY] after correction LEFT=")+ledClassName(drvLed.cls)+" actual="+stateName(corrected));
-    if(corrected!=VEH_UNKNOWN)setLastKnownLockState(corrected,"LEFT after correction");
-    if(corrected==wanted){lastCommandResult=wantLocked?"LOCK confirmed after correction":"UNLOCK confirmed after correction";addLog(String("[COMMAND] ")+lastCommandResult);return true;}
-  }
-  lastCommandResult="failed - requested state not verified";addLog(String("[COMMAND] ")+lastCommandResult);return false;
+  VehicleLockState after=leftLedState();
+  addLog(String("[VERIFY] after state pulse LEFT=")+ledClassName(drvLed.cls)+" actual="+stateName(after)+" wanted="+stateName(wanted));
+  if(after!=VEH_UNKNOWN)setLastKnownLockState(after,"LEFT after state pulse");
+  if(after==wanted){lastCommandResult=wantLocked?"LOCK confirmed":"UNLOCK confirmed";addLog(String("[COMMAND] ")+lastCommandResult);return true;}
+  lastCommandResult=(after==VEH_UNKNOWN)?"state pulse sent; result unverified; no retry":"state pulse sent; LEFT disagrees; no retry";
+  addLog(String("[COMMAND] ")+lastCommandResult);return false;
 }
