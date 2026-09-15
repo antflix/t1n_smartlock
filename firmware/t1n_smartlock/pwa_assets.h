@@ -2,90 +2,25 @@
 
 const char MAIN_HTML[] PROGMEM = R"HTML(
 <!doctype html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101010">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="T1N Lock">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" sizes="180x180" href="https://raw.githubusercontent.com/antflix/t1n_smartlock/main/assets/sprinter-smart-lock-180.png">
-<title>T1N Lock</title>
-<style>
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;min-height:100%;background:#101010;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif}
-body{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 14px);display:flex;flex-direction:column;gap:12px}
-.status{display:flex;align-items:center;justify-content:center;gap:10px;min-height:54px;font-size:22px;font-weight:800}.dot{width:16px;height:16px;border-radius:50%;background:#777}.dot.locked{background:#45d483}.dot.unlocked{background:#ff6b6b}.dot.door{background:#ffd166}
-.controls{flex:1;display:grid;grid-template-rows:1fr 1fr;gap:14px;min-height:0}.big{border:0;border-radius:24px;color:#fff;font-weight:900;font-size:clamp(34px,10vw,58px);box-shadow:inset 0 1px rgba(255,255,255,.15),0 8px 28px rgba(0,0,0,.28)}.big:active{transform:scale(.985)}.lock{background:#b33f3f}.unlock{background:#2f7d49}
-.footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:42px;color:#aaa;font-size:13px}.debug{position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 8px);border:0;border-radius:12px;background:#29292c;color:#aaa;padding:9px 11px;font-size:12px;opacity:.82}.smallstate{padding-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80%}
-</style></head><body>
-<div class="status"><span id="dot" class="dot"></span><span id="state">CONNECTING…</span></div>
-<div class="controls"><button class="big lock" onclick="sendCmd('lock')">LOCK</button><button class="big unlock" onclick="sendCmd('unlock')">UNLOCK</button></div>
-<div class="footer"><span class="smallstate" id="detail">T1N Smart Lock</span></div><button class="debug" onclick="location.href='/debug'">DEBUG</button>
-<script>
-const e=id=>document.getElementById(id);
-async function sendCmd(c){try{await fetch('/api/cmd?do='+c,{method:'POST'});}catch(x){}setTimeout(refresh,250)}
-function paint(s){const st=(s.lockState||'UNKNOWN').toUpperCase();e('state').textContent=st;e('dot').className='dot';if(st==='LOCKED')e('dot').classList.add('locked');else if(st==='UNLOCKED')e('dot').classList.add('unlocked');else if(st.includes('DOOR')||st.includes('BLINK'))e('dot').classList.add('door');e('detail').textContent='Auto '+s.auto+' • RSSI '+s.rssi}
-async function refresh(){try{paint(await(await fetch('/api/status',{cache:'no-store'})).json())}catch(x){e('state').textContent='OFFLINE';e('dot').className='dot'}}
-setInterval(refresh,700);refresh();
-</script></body></html>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#101010"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="T1N Lock"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" sizes="180x180" href="https://raw.githubusercontent.com/antflix/t1n_smartlock/main/assets/sprinter-smart-lock-180.png"><title>T1N Lock</title>
+<style>*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;min-height:100%;background:#101010;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif}body{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 14px);display:flex;flex-direction:column;gap:12px}.status{display:flex;align-items:center;justify-content:center;gap:10px;min-height:54px;font-size:22px;font-weight:800}.dot{width:16px;height:16px;border-radius:50%;background:#777}.dot.locked{background:#45d483}.dot.unlocked{background:#ff6b6b}.dot.door{background:#ffd166}.controls{flex:1;display:grid;grid-template-rows:1fr 1fr;gap:14px;min-height:0}.big{border:0;border-radius:24px;color:#fff;font-weight:900;font-size:clamp(34px,10vw,58px);box-shadow:inset 0 1px rgba(255,255,255,.15),0 8px 28px rgba(0,0,0,.28)}.big:active{transform:scale(.985)}.lock{background:#b33f3f}.unlock{background:#2f7d49}.footer{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:42px;color:#aaa;font-size:13px}.debug{position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 8px);border:0;border-radius:12px;background:#29292c;color:#aaa;padding:9px 11px;font-size:12px;opacity:.82}.smallstate{padding-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80%}</style></head><body>
+<div class="status"><span id="dot" class="dot"></span><span id="state">CONNECTING…</span></div><div class="controls"><button class="big lock" onclick="sendCmd('lock')">LOCK</button><button class="big unlock" onclick="sendCmd('unlock')">UNLOCK</button></div><div class="footer"><span class="smallstate" id="detail">T1N Smart Lock</span></div><button class="debug" onclick="location.href='/debug'">DEBUG</button>
+<script>const e=id=>document.getElementById(id);async function sendCmd(c){try{await fetch('/api/cmd?do='+c,{method:'POST'});}catch(x){}setTimeout(refresh,250)}function paint(s){const st=(s.lockState||'UNKNOWN').toUpperCase();e('state').textContent=st;e('dot').className='dot';if(st==='LOCKED')e('dot').classList.add('locked');else if(st==='UNLOCKED')e('dot').classList.add('unlocked');else if(st.includes('DOOR')||st.includes('BLINK'))e('dot').classList.add('door');e('detail').textContent='Auto '+s.auto+' • RSSI '+s.rssi}async function refresh(){try{paint(await(await fetch('/api/status',{cache:'no-store'})).json())}catch(x){e('state').textContent='OFFLINE';e('dot').className='dot'}}setInterval(refresh,700);refresh();</script></body></html>
 )HTML";
 
-const char MANIFEST_JSON[] PROGMEM = R"JSON({
-  "name":"T1N Smart Lock",
-  "short_name":"T1N Lock",
-  "start_url":"/",
-  "scope":"/",
-  "display":"standalone",
-  "background_color":"#101010",
-  "theme_color":"#101010",
-  "icons":[{"src":"https://raw.githubusercontent.com/antflix/t1n_smartlock/main/assets/sprinter-smart-lock-180.png","sizes":"180x180","type":"image/png","purpose":"any"}]
-})JSON";
+const char MANIFEST_JSON[] PROGMEM = R"JSON({"name":"T1N Smart Lock","short_name":"T1N Lock","start_url":"/","scope":"/","display":"standalone","background_color":"#101010","theme_color":"#101010","icons":[{"src":"https://raw.githubusercontent.com/antflix/t1n_smartlock/main/assets/sprinter-smart-lock-180.png","sizes":"180x180","type":"image/png","purpose":"any"}]})JSON";
 
 const char OTA_HTML[] PROGMEM = R"HTML(
-<!doctype html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#101010"><title>T1N Firmware Update</title>
-<style>
-*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;background:#101010;color:#fff;margin:0;padding:20px}.wrap{max-width:620px;margin:auto}.card{background:#1c1c1e;border-radius:18px;padding:20px;margin:16px 0}h1{font-size:26px;margin:4px 0 8px}h2{font-size:18px;margin:0 0 10px}.muted{color:#aaa;line-height:1.45}.btn{width:100%;border:0;border-radius:14px;padding:16px;font-size:17px;font-weight:800;background:#356aa0;color:#fff;margin-top:12px}.btn:disabled{opacity:.45}.secondary{background:#555}.status{margin-top:14px;white-space:pre-wrap;word-break:break-word;color:#ddd}.back{color:#8ec5ff;text-decoration:none}.file{display:block;width:100%;margin-top:14px;padding:13px;border:1px solid #444;border-radius:12px;background:#121214;color:#ddd}
-</style></head><body><div class="wrap">
-<a class="back" href="/debug">← Diagnostics</a>
-<h1>Firmware Update</h1>
-<div class="card"><h2>Latest GitHub build</h2>
-<div class="muted">Press once to download and install the current <b>latest</b> firmware release from the T1N Smart Lock repository. The ESP32 will reboot automatically after a successful install.</div>
-<button id="latest" class="btn" onclick="installLatest()">CHECK FOR UPDATES &amp; INSTALL</button>
-<div id="status" class="status"></div></div>
-<div class="card"><h2>Manual .bin upload</h2>
-<div class="muted">Recovery fallback. Choose a compiled <code>firmware.bin</code> file and upload it directly to the ESP32.</div>
-<input id="binfile" class="file" type="file" accept=".bin,application/octet-stream">
-<button id="manual" class="btn secondary" onclick="installManual()">UPLOAD .BIN &amp; INSTALL</button>
-<div id="manualStatus" class="status"></div>
-</div>
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#101010"><title>T1N Firmware Update</title>
+<style>*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;background:#101010;color:#fff;margin:0;padding:20px}.wrap{max-width:620px;margin:auto}.card{background:#1c1c1e;border-radius:18px;padding:20px;margin:16px 0}h1{font-size:26px;margin:4px 0 8px}h2{font-size:18px;margin:0 0 10px}.muted{color:#aaa;line-height:1.45}.version{font-size:17px;line-height:1.7}.version b{color:#8ec5ff}.btn{display:block;width:100%;border:0;border-radius:14px;padding:16px;font-size:17px;font-weight:800;background:#356aa0;color:#fff;margin-top:12px;text-align:center;text-decoration:none}.btn:disabled{opacity:.45}.secondary{background:#555}.status{margin-top:14px;white-space:pre-wrap;word-break:break-word;color:#ddd}.back{color:#8ec5ff;text-decoration:none}.file{display:block;width:100%;margin-top:14px;padding:13px;border:1px solid #444;border-radius:12px;background:#121214;color:#ddd}</style></head><body><div class="wrap">
+<a class="back" href="/debug">← Diagnostics</a><h1>Firmware Update</h1>
+<div class="card"><h2>Version</h2><div class="version">Installed: <b id="installed">loading…</b><br>Latest: <b id="latestVersion">checking…</b></div></div>
+<div class="card"><h2>Automatic update</h2><div class="muted">The ESP32 fetches the latest release manifest, verifies the firmware SHA-256, downloads the firmware, installs it, and reboots.</div><button id="latest" class="btn" onclick="installLatest()">INSTALL LATEST FIRMWARE</button><div id="status" class="status"></div></div>
+<div class="card"><h2>Manual fallback</h2><div class="muted">Download the exact same latest firmware file here, then choose it below and upload it directly to the ESP32.</div><a class="btn secondary" href="https://github.com/antflix/t1n_smartlock/releases/download/latest/firmware.bin">DOWNLOAD LATEST .BIN</a><input id="binfile" class="file" type="file" accept=".bin,application/octet-stream"><button id="manual" class="btn secondary" onclick="installManual()">UPLOAD .BIN &amp; INSTALL</button><div id="manualStatus" class="status"></div></div>
 </div><script>
-const latestUrl='https://github.com/antflix/t1n_smartlock/releases/download/latest/firmware.bin';
-async function installLatest(){
- const b=document.getElementById('latest'),s=document.getElementById('status');
- b.disabled=true;s.textContent='Checking latest firmware...';
- try{
-   s.textContent='Downloading update on ESP32...';
-   const r=await fetch('/api/update-url?url='+encodeURIComponent(latestUrl),{method:'POST'});
-   const t=await r.text();
-   s.textContent=r.ok?'Update installed. Rebooting...':'Update failed: '+t;
-   if(r.ok)setTimeout(()=>{s.textContent='Rebooting. Refresh this page in about 20 seconds.';},2500);
-   if(!r.ok)b.disabled=false;
- }catch(e){s.textContent='Connection lost. If the update succeeded, the ESP32 may already be rebooting.';}
-}
-async function installManual(){
- const f=document.getElementById('binfile'),b=document.getElementById('manual'),s=document.getElementById('manualStatus');
- if(!f.files.length){s.textContent='Choose a .bin firmware file first.';return;}
- const file=f.files[0];
- if(!file.name.toLowerCase().endsWith('.bin')){s.textContent='The selected file must end in .bin';return;}
- b.disabled=true;s.textContent='Uploading firmware to ESP32…';
- const data=new FormData();data.append('firmware',file,file.name);
- try{
-   const r=await fetch('/api/update',{method:'POST',body:data});
-   const t=await r.text();s.textContent=t;
-   if(!r.ok)b.disabled=false;
- }catch(e){s.textContent='Connection lost. If the update succeeded, the ESP32 may already be rebooting.';}
-}
+async function loadVersions(){try{const s=await(await fetch('/api/status',{cache:'no-store'})).json();document.getElementById('installed').textContent=s.firmware||'unknown';}catch(e){document.getElementById('installed').textContent='unknown';}try{const r=await fetch('/api/latest-version',{cache:'no-store'});const j=await r.json();document.getElementById('latestVersion').textContent=j.version||'unknown';}catch(e){document.getElementById('latestVersion').textContent='unavailable';}}
+async function installLatest(){const b=document.getElementById('latest'),s=document.getElementById('status');b.disabled=true;s.textContent='Fetching release manifest…';try{const r=await fetch('/api/update-latest',{method:'POST'});const t=await r.text();s.textContent=r.ok?t:'Update failed: '+t;if(r.ok)setTimeout(()=>s.textContent='Installed. ESP32 is rebooting…',800);else b.disabled=false;}catch(e){s.textContent='Connection lost. If installation succeeded, the ESP32 is rebooting.';}}
+async function installManual(){const f=document.getElementById('binfile'),b=document.getElementById('manual'),s=document.getElementById('manualStatus');if(!f.files.length){s.textContent='Choose a .bin firmware file first.';return;}const file=f.files[0];if(!file.name.toLowerCase().endsWith('.bin')){s.textContent='The selected file must end in .bin';return;}b.disabled=true;s.textContent='Uploading firmware to ESP32…';const data=new FormData();data.append('firmware',file,file.name);try{const r=await fetch('/api/update',{method:'POST',body:data});s.textContent=await r.text();if(!r.ok)b.disabled=false;}catch(e){s.textContent='Connection lost. If installation succeeded, the ESP32 is rebooting.';}}
+loadVersions();
 </script></body></html>
 )HTML";
