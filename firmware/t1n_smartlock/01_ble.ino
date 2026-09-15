@@ -22,7 +22,8 @@ uint32_t lastSeenMs = 0;
 bool phoneSeen = false;
 int strongCount = 0;
 bool proximityUnlocked = false;
-bool departureAttempted = false; // one lock attempt per away event; reset only by renewed proximity
+bool approachAttempted = false;  // one unlock attempt per approach event
+bool departureAttempted = false; // one lock attempt per departure event
 String bleMode = "INIT";
 String lastBleAddress = "--";
 String lastBleEvent = "boot";
@@ -59,8 +60,7 @@ class SecurityCallbacks:public BLESecurityCallbacks{
  void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl)override{bleAuthCount++;bleAuthSuccess=cmpl.success;bleAuthFailReason=cmpl.success?0:cmpl.fail_reason;if(!cmpl.success){lastBleEvent=String("auth failed ")+cmpl.fail_reason;addLog(String("[BLE] AUTH FAILED reason=")+cmpl.fail_reason);return;}lastBleEvent="authentication complete";addLog(String("[BLE] AUTH SUCCESS addr=")+formatAddr(cmpl.bd_addr));int n=esp_ble_get_bond_device_num();if(n<=0)return;esp_ble_bond_dev_t* list=(esp_ble_bond_dev_t*)malloc(sizeof(esp_ble_bond_dev_t)*n);if(!list)return;esp_ble_get_bond_device_list(&n,list);bool saved=false;for(int i=0;i<n;i++)if(memcmp(list[i].bd_addr,cmpl.bd_addr,6)==0){saveIRKFromBond(list[i]);saved=true;break;}free(list);if(saved){delay(2000);ESP.restart();}}
 };
 class ScanCallbacks:public BLEAdvertisedDeviceCallbacks{void onResult(BLEAdvertisedDevice d)override{bleAdvertCount++;const uint8_t* native=d.getAddress().getNative();uint8_t a[6],rev[6];memcpy(a,native,6);for(int i=0;i<6;i++)rev[i]=native[5-i];if(((a[0]&0xC0)==0x40)||((rev[0]&0xC0)==0x40))bleRpaCount++;if(!(rpaMatchesPhone(a)||rpaMatchesPhone(rev)))return;bleMatchCount++;lastRSSI=d.getRSSI();lastSeenMs=millis();phoneSeen=true;lastBleAddress=formatAddr(a);lastBleEvent="phone RPA matched";
- // A genuinely near/approaching phone starts a new proximity cycle and permits a future departure attempt.
- if(lastRSSI>=rssiUnlockThreshold){strongCount++;departureAttempted=false;}else strongCount=0;
+ if(lastRSSI>=rssiUnlockThreshold)strongCount++;else strongCount=0;
  if(lastRSSI<=rssiLockThreshold){if(weakRssiSinceMs==0)weakRssiSinceMs=lastSeenMs;}else weakRssiSinceMs=0;
 }};
 
@@ -72,15 +72,13 @@ void startDoorTrend(const char* whichLed){if(fullyLocked())return;doorTrendActiv
 void detectDoorCloseTransitions(){LedClass d=drvLed.cls,p=paxLed.cls;if(prevDrvLedClass==LED_BLINK&&(d==LED_OFF||d==LED_SOLID))startDoorTrend("LEFT");if(prevPaxLedClass==LED_BLINK&&(p==LED_OFF||p==LED_SOLID))startDoorTrend("RIGHT");prevDrvLedClass=d;prevPaxLedClass=p;}
 bool doorTrendIsClearlyWeaker(){if(trendCount<TREND_MIN_SAMPLES)return false;float sumT=0,sumR=0,sumTT=0,sumTR=0;int weaker=0,stronger=0;for(int i=0;i<trendCount;i++){float t=(trendTime[i]-trendTime[0])/1000.0f,r=(float)trendRssi[i];sumT+=t;sumR+=r;sumTT+=t*t;sumTR+=t*r;if(i>0){int delta=trendRssi[i]-trendRssi[i-1];if(delta<=-1)weaker++;else if(delta>=2)stronger++;}}float n=(float)trendCount,denom=n*sumTT-sumT*sumT,slope=denom!=0?(n*sumTR-sumT*sumR)/denom:0;int drop=trendRssi[0]-trendRssi[trendCount-1];bool majority=weaker>=max(3,(trendCount-1)/2)&&weaker>stronger;addLog(String("[TREND] samples=")+trendCount+" drop="+drop+" slope="+String(slope,2));return drop>=TREND_MIN_TOTAL_DROP_DB&&slope<=TREND_MAX_SLOPE_DB_PER_SEC&&majority;}
 
-// One departure event gets one command transaction. A failed command is logged and latched;
-// it cannot retrigger every loop/timeout. A renewed near-phone event clears the latch.
 bool attemptDepartureLock(const char* reason){
  if(departureAttempted){return false;}
  departureAttempted=true;
  addLog(String("[AUTO] departure lock attempt reason=")+reason);
  bool ok=ensureDesiredState(true,false);
- // Consume this away event whether successful or failed. This prevents pulse storms.
- proximityUnlocked=false;phoneSeen=false;strongCount=0;weakRssiSinceMs=0;resetDoorTrend(ok?"LOCKED / WAITING FOR RETURN":"LOCK FAILED / WAITING FOR RETURN");
+ approachAttempted=false;
+ proximityUnlocked=false;phoneSeen=false;strongCount=0;weakRssiSinceMs=0;resetDoorTrend(ok?"LOCKED / WAITING FOR RETURN":"LOCK ATTEMPT COMPLETE / WAITING FOR RETURN");
  return ok;
 }
 
@@ -88,7 +86,17 @@ void updateDoorTrend(){if(!doorTrendActive)return;uint32_t now=millis();if((last
 
 void updateProximityLogic(){
  if(!hasIRK)return;uint32_t now=millis();
- if(strongCount>=strongConfirmCount&&!proximityUnlocked){addLog(String("[AUTO] approach confirmed RSSI=")+lastRSSI);departureAttempted=false;if(ensureDesiredState(false,false)){proximityUnlocked=true;weakRssiSinceMs=0;}strongCount=0;}
+ if(strongCount>=strongConfirmCount){
+  if(!approachAttempted){
+   approachAttempted=true;
+   departureAttempted=false;
+   addLog(String("[AUTO] approach confirmed RSSI=")+lastRSSI);
+   bool ok=ensureDesiredState(false,false);
+   proximityUnlocked=ok;
+   if(ok)weakRssiSinceMs=0;
+  }
+  strongCount=0;
+ }
  updateDoorTrend();
  if(departureAttempted)return;
  if(weakRssiSinceMs&&now-weakRssiSinceMs>=weakRssiTimeoutMs){addLog(String("[AUTO] RSSI <= ")+rssiLockThreshold+" dBm for "+(now-weakRssiSinceMs)+"ms -> lock");attemptDepartureLock("weak RSSI timeout");return;}
