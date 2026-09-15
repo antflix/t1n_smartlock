@@ -1,4 +1,4 @@
-static const char* FIRMWARE_VERSION = "v10-manifest-ota";
+static const char* FIRMWARE_VERSION = "v11-single-attempt";
 
 void setupWebUI() {
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID,WIFI_PASS); addLog(String("[WIFI] connecting to ")+WIFI_SSID);
