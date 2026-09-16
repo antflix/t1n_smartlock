@@ -55,12 +55,15 @@ jobs:
           cp "$APP_BIN" dist/firmware.bin
           sha256sum dist/firmware.bin | awk '{print $1}' > dist/firmware.sha256
           python3 - <<'PY'
-          import datetime, json, os, pathlib
+          import datetime, json, os, pathlib, re
           sha = pathlib.Path('dist/firmware.sha256').read_text().strip()
           repo = os.environ['GITHUB_REPOSITORY']
           commit = os.environ['GITHUB_SHA']
+          server = pathlib.Path('firmware/t1n_smartlock/04_server.ino').read_text()
+          match = re.search(r'FIRMWARE_VERSION\s*=\s*"([^"]+)"', server)
+          version = match.group(1) if match else commit[:7]
           manifest = {
-              'version': 'v9-remote-ota+' + commit[:7],
+              'version': version,
               'commit': commit,
               'built_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
               'firmware_url': f'https://github.com/{repo}/releases/download/latest/firmware.bin',
@@ -73,6 +76,7 @@ jobs:
           PY
           ls -lh dist
           cat dist/firmware.sha256
+          cat dist/manifest.json
 
       - name: Publish moving latest release
         env:
