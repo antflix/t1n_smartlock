@@ -88,8 +88,18 @@ static constexpr int LOG_LINES = 120;
 String eventLog[LOG_LINES];
 int eventLogHead = 0;
 int eventLogCount = 0;
+uint32_t lastEventLogMs = 0;
+static constexpr uint32_t LOG_BLOCK_GAP_MS = 30000;
 void addLog(const String& s) {
-  String line = String(millis() / 1000) + "s  " + s;
+  uint32_t now = millis();
+  if (eventLogCount > 0 && lastEventLogMs > 0 && now - lastEventLogMs >= LOG_BLOCK_GAP_MS) {
+    eventLog[eventLogHead] = "";
+    eventLogHead = (eventLogHead + 1) % LOG_LINES;
+    if (eventLogCount < LOG_LINES) eventLogCount++;
+    Serial.println();
+  }
+  lastEventLogMs = now;
+  String line = String(now / 1000) + "s  " + s;
   eventLog[eventLogHead] = line;
   eventLogHead = (eventLogHead + 1) % LOG_LINES;
   if (eventLogCount < LOG_LINES) eventLogCount++;
@@ -182,6 +192,7 @@ String lockStateName(){
 }
 
 bool gpio23Forced=false;uint32_t gpio23ForceUntil=0,pulseCountTotal=0,commandCountTotal=0;
+bool lockCommandInProgress=false;
 String lastCommand="none",lastCommandResult="none";VehicleLockState desiredLockState=VEH_UNKNOWN;
 void setLockOutput(bool high,const char* reason){digitalWrite(PIN_LOCK_PULSE,high?HIGH:LOW);digitalWrite(PIN_STATUS_LED,high?HIGH:LOW);delay(2);int rb=digitalRead(PIN_LOCK_PULSE);addLog(String("[GPIO23] ")+(high?"HIGH":"LOW")+" reason="+reason+" readback="+(rb?"HIGH":"LOW"));}
 void directPulse(uint32_t widthMs=PULSE_MS){pulseCountTotal++;addLog(String("[PULSE] #")+pulseCountTotal+" width="+widthMs+"ms");setLockOutput(true,"pulse-start");delay(widthMs);setLockOutput(false,"pulse-end");}
@@ -199,12 +210,13 @@ bool finishFromLed(bool wantLocked,const char* phase){
 }
 
 bool ensureDesiredState(bool wantLocked,bool manualRequest){
+  lockCommandInProgress=true;
   commandCountTotal++;lastCommand=wantLocked?"LOCK":"UNLOCK";
   VehicleLockState wanted=wantLocked?VEH_LOCKED:VEH_UNLOCKED;desiredLockState=wanted;
   if(!manualRequest&&wantLocked&&blockAutoLockOnBlink&&anyBlink()){
     lastCommandResult="auto lock blocked by door/blink";
     addLog("[COMMAND] no pulse - auto lock blocked by door/blink");
-    return false;
+    lockCommandInProgress=false; return false;
   }
 
   waitAndSample(300);
@@ -216,19 +228,19 @@ bool ensureDesiredState(bool wantLocked,bool manualRequest){
     if(wantLocked){
       lastCommandResult="already locked - LEFT solid";
       addLog(String("[COMMAND] no pulse - ")+lastCommandResult);
-      return true;
+      lockCommandInProgress=false; return true;
     }
     addLog("[COMMAND] one pulse from verified LOCKED toward UNLOCK");
     directPulse();
     waitAndSample(STATE_SETTLE_MS);
-    return finishFromLed(false,"after unlock pulse");
+    { bool ok=finishFromLed(false,"after unlock pulse"); lockCommandInProgress=false; return ok; }
   }
 
   // LEFT OFF plus remembered UNLOCKED is the one safe no-pulse shortcut.
   if(!wantLocked&&drvLed.cls==LED_OFF&&lastKnownLockState==VEH_UNLOCKED){
     lastCommandResult="already unlocked - remembered + LEFT off";
     addLog(String("[COMMAND] no pulse - ")+lastCommandResult);
-    return true;
+    lockCommandInProgress=false; return true;
   }
 
   // Otherwise the first pulse is a probe: if asleep it wakes the CTM; if already
@@ -245,12 +257,12 @@ bool ensureDesiredState(bool wantLocked,bool manualRequest){
   if(afterFirst==wanted){
     lastCommandResult=wantLocked?"LOCK confirmed after first pulse":"UNLOCK confirmed after first pulse";
     addLog(String("[COMMAND] ")+lastCommandResult);
-    return true;
+    lockCommandInProgress=false; return true;
   }
   if(afterFirst==VEH_UNKNOWN){
     lastCommandResult="first pulse complete; LEFT unreadable; no second pulse";
     addLog(String("[COMMAND] ")+lastCommandResult);
-    return false;
+    lockCommandInProgress=false; return false;
   }
 
   // Definite opposite state after the one-second wait: one final state pulse.
@@ -258,5 +270,5 @@ bool ensureDesiredState(bool wantLocked,bool manualRequest){
   addLog(String("[COMMAND] second/final pulse toward ")+lastCommand);
   directPulse();
   waitAndSample(STATE_SETTLE_MS);
-  return finishFromLed(wantLocked,"after second/final pulse");
+  { bool ok=finishFromLed(wantLocked,"after second/final pulse"); lockCommandInProgress=false; return ok; }
 }
