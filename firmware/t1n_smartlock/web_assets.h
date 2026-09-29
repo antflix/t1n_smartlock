@@ -13,7 +13,7 @@ const char MAIN_HTML[] PROGMEM = R"HTML(
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;min-height:100%;background:#101010;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif}
 body{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 14px);display:flex;flex-direction:column;gap:12px}
-.status{display:flex;align-items:center;justify-content:center;gap:10px;min-height:54px;font-size:22px;font-weight:800;letter-spacing:.2px}
+.doorstatus{display:none;text-align:center;background:#ffd166;color:#181818;border-radius:14px;padding:10px;font-size:18px;font-weight:900;letter-spacing:.4px}.doorstatus.show{display:block}.status{display:flex;align-items:center;justify-content:center;gap:10px;min-height:54px;font-size:22px;font-weight:800;letter-spacing:.2px}
 .dot{width:16px;height:16px;border-radius:50%;background:#777;box-shadow:0 0 12px rgba(255,255,255,.15)}
 .dot.locked{background:#45d483;box-shadow:0 0 18px rgba(69,212,131,.55)}
 .dot.unlocked{background:#ff6b6b;box-shadow:0 0 18px rgba(255,107,107,.45)}
@@ -26,6 +26,7 @@ body{min-height:100dvh;padding:calc(env(safe-area-inset-top) + 12px) 14px calc(e
 .debug{position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 8px);border:0;border-radius:12px;background:#29292c;color:#aaa;padding:9px 11px;font-size:12px;opacity:.82}
 .smallstate{padding-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80%}
 </style></head><body>
+<div id="doorstatus" class="doorstatus">DOOR OPEN</div>
 <div class="status"><span id="dot" class="dot"></span><span id="state">CONNECTING…</span></div>
 <div class="controls">
 <button class="big lock" onclick="sendCmd('lock')">LOCK</button>
@@ -40,6 +41,8 @@ async function sendCmd(c){
   setTimeout(refresh,250);
 }
 function paint(s){
+  const doorOpen=String(s.doorOpen||'NO')==='YES';
+  e('doorstatus').className='doorstatus'+(doorOpen?' show':'');
   const st=(s.lockState||'UNKNOWN').toUpperCase();
   e('state').textContent=st;
   e('dot').className='dot';
@@ -105,7 +108,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"HTML(
 <div><span class=k>Free heap </span><span class=v id=heap>--</span></div><div><span class=k>Command result </span><span class=v id=result>--</span></div>
 </div></div>
 
-<div class=card><div class=section>Live event log</div><pre id=log>Loading...</pre><button onclick="cmd('clearLog')">CLEAR LOG</button></div>
+<div class=card><div class=section>Live event log</div><pre id=log>Loading...</pre><div class=row><button onclick="location.href='/logs'">VIEW FULL LOG</button><button onclick="cmd('clearLog')">CLEAR LOG</button></div></div>
 <script>
 function e(x){return document.getElementById(x)}
 async function cmd(c){try{await fetch('/api/cmd?do='+c,{method:'POST'});}catch(x){} setTimeout(refresh,200)}
@@ -113,6 +116,19 @@ async function saveSettings(){let u='/api/settings?unlock='+encodeURIComponent(e
 async function refresh(){try{let s=await (await fetch('/api/status')).json();for(let k in s){if(e(k))e(k).textContent=s[k]}if(document.activeElement!==e('thr'))e('thr').value=s.unlockThreshold;if(document.activeElement!==e('lockthr'))e('lockthr').value=s.lockThreshold;if(document.activeElement!==e('to'))e('to').value=s.goneTimeout; e('log').textContent=await (await fetch('/api/log')).text();}catch(x){}}
 setInterval(refresh,1000);refresh();
 </script><button onclick="location.href='/update'">FIRMWARE UPDATE</button></body></html>
+)HTML";
+
+const char LOGS_HTML[] PROGMEM = R"HTML(
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101010"><title>T1N Event Log</title>
+<style>*{box-sizing:border-box}body{font-family:-apple-system,system-ui,sans-serif;background:#101010;color:#eee;margin:0;padding:14px;max-width:1000px;margin:auto}h1{font-size:22px}.bar{display:flex;gap:8px;margin-bottom:12px;position:sticky;top:0;background:#101010;padding:8px 0}button,a{border:0;border-radius:9px;background:#444;color:#fff;padding:11px 14px;text-decoration:none;font-size:14px}pre{white-space:pre-wrap;word-break:break-word;background:#070707;padding:12px;border-radius:10px;font-size:12px;line-height:1.45;min-height:60vh}</style></head><body>
+<h1>Full Event Log</h1><div class="bar"><a href="/debug">BACK</a><button onclick="loadLog()">REFRESH</button><button onclick="clearLog()">CLEAR LOG</button></div>
+<pre id="log">Loading...</pre>
+<script>
+async function loadLog(){try{document.getElementById('log').textContent=await(await fetch('/api/log',{cache:'no-store'})).text()}catch(e){document.getElementById('log').textContent='Unable to load log.'}}
+async function clearLog(){if(!confirm('Clear the event log?'))return;await fetch('/api/cmd?do=clearLog',{method:'POST'});await loadLog()}
+loadLog();
+</script></body></html>
 )HTML";
 
 const char MANIFEST_JSON[] PROGMEM = R"JSON({
