@@ -20,6 +20,8 @@ uint32_t bleMatchCount = 0;
 int lastRSSI = -127;
 uint32_t lastSeenMs = 0;
 bool phoneSeen = false;
+uint32_t firstPhoneSeenMs = 0;
+int firstPhoneSeenRssi = -127;
 int strongCount = 0;
 bool proximityUnlocked = false;
 bool approachAttempted = false;  // one unlock attempt per approach event
@@ -59,7 +61,9 @@ class SecurityCallbacks:public BLESecurityCallbacks{
  uint32_t onPassKeyRequest()override{addLog("[BLE] passkey requested -> 123456");return 123456;}void onPassKeyNotify(uint32_t p)override{addLog(String("[BLE] passkey notify ")+p);}bool onConfirmPIN(uint32_t p)override{addLog(String("[BLE] confirm PIN ")+p);return true;}bool onSecurityRequest()override{return true;}
  void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl)override{bleAuthCount++;bleAuthSuccess=cmpl.success;bleAuthFailReason=cmpl.success?0:cmpl.fail_reason;if(!cmpl.success){lastBleEvent=String("auth failed ")+cmpl.fail_reason;addLog(String("[BLE] AUTH FAILED reason=")+cmpl.fail_reason);return;}lastBleEvent="authentication complete";addLog(String("[BLE] AUTH SUCCESS addr=")+formatAddr(cmpl.bd_addr));int n=esp_ble_get_bond_device_num();if(n<=0)return;esp_ble_bond_dev_t* list=(esp_ble_bond_dev_t*)malloc(sizeof(esp_ble_bond_dev_t)*n);if(!list)return;esp_ble_get_bond_device_list(&n,list);bool saved=false;for(int i=0;i<n;i++)if(memcmp(list[i].bd_addr,cmpl.bd_addr,6)==0){saveIRKFromBond(list[i]);saved=true;break;}free(list);if(saved){delay(2000);ESP.restart();}}
 };
-class ScanCallbacks:public BLEAdvertisedDeviceCallbacks{void onResult(BLEAdvertisedDevice d)override{bleAdvertCount++;const uint8_t* native=d.getAddress().getNative();uint8_t a[6],rev[6];memcpy(a,native,6);for(int i=0;i<6;i++)rev[i]=native[5-i];if(((a[0]&0xC0)==0x40)||((rev[0]&0xC0)==0x40))bleRpaCount++;if(!(rpaMatchesPhone(a)||rpaMatchesPhone(rev)))return;bleMatchCount++;lastRSSI=d.getRSSI();lastSeenMs=millis();phoneSeen=true;lastBleAddress=formatAddr(a);lastBleEvent="phone RPA matched";
+class ScanCallbacks:public BLEAdvertisedDeviceCallbacks{void onResult(BLEAdvertisedDevice d)override{bleAdvertCount++;const uint8_t* native=d.getAddress().getNative();uint8_t a[6],rev[6];memcpy(a,native,6);for(int i=0;i<6;i++)rev[i]=native[5-i];if(((a[0]&0xC0)==0x40)||((rev[0]&0xC0)==0x40))bleRpaCount++;if(!(rpaMatchesPhone(a)||rpaMatchesPhone(rev)))return;bleMatchCount++;int matchedRssi=d.getRSSI();uint32_t matchedAt=millis();
+ if(!phoneSeen){firstPhoneSeenMs=matchedAt;firstPhoneSeenRssi=matchedRssi;addLog(String("[BLE] phone first detected RSSI=")+matchedRssi+" dBm");}
+ lastRSSI=matchedRssi;lastSeenMs=matchedAt;phoneSeen=true;lastBleAddress=formatAddr(a);lastBleEvent="phone RPA matched";
  if(lastRSSI>=rssiUnlockThreshold)strongCount++;else strongCount=0;
  if(lastRSSI<=rssiLockThreshold){if(weakRssiSinceMs==0)weakRssiSinceMs=lastSeenMs;}else weakRssiSinceMs=0;
 }};
@@ -78,7 +82,7 @@ bool attemptDepartureLock(const char* reason){
  addLog(String("[AUTO] departure lock attempt reason=")+reason);
  bool ok=ensureDesiredState(true,false);
  approachAttempted=false;
- proximityUnlocked=false;phoneSeen=false;strongCount=0;weakRssiSinceMs=0;resetDoorTrend(ok?"LOCKED / WAITING FOR RETURN":"LOCK ATTEMPT COMPLETE / WAITING FOR RETURN");
+ proximityUnlocked=false;phoneSeen=false;firstPhoneSeenMs=0;firstPhoneSeenRssi=-127;strongCount=0;weakRssiSinceMs=0;resetDoorTrend(ok?"LOCKED / WAITING FOR RETURN":"LOCK ATTEMPT COMPLETE / WAITING FOR RETURN");
  return ok;
 }
 
@@ -90,7 +94,9 @@ void updateProximityLogic(){
   if(!approachAttempted){
    approachAttempted=true;
    departureAttempted=false;
-   addLog(String("[AUTO] approach confirmed RSSI=")+lastRSSI);
+   String approachLog=String("[AUTO] approach confirmed RSSI=")+lastRSSI+" dBm";
+   if(firstPhoneSeenMs)approachLog+=", "+String((now-firstPhoneSeenMs)/1000.0f,1)+" sec after first detection";
+   addLog(approachLog);
    bool ok=ensureDesiredState(false,false);
    proximityUnlocked=ok;
    if(ok)weakRssiSinceMs=0;
